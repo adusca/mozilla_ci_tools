@@ -9,7 +9,8 @@ setup(
     install_requires=[
         'beautifulsoup4==4.3.2',
         'requests==2.5.1',
-        'bugsy==0.4.0'
+        'bugsy==0.4.0',
+        'mozillapulse'
     ],
 
     # Meta-data for upload to PyPI
