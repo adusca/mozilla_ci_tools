@@ -6,7 +6,6 @@ from mozci.mozci import backfill_revlist, trigger_range, \
     query_repo_name_from_buildername, query_repo_url_from_buildername
 from mozci.sources.pushlog import query_revisions_range_from_revision_and_delta
 from mozci.sources.pushlog import query_revisions_range, query_revision_info, query_pushid_range
-from mozci.utils.pulse import run_pulse
 
 logging.basicConfig(format='%(asctime)s %(levelname)s:\t %(message)s',
                     datefmt='%m/%d/%Y %I:%M:%S')
@@ -62,11 +61,6 @@ def parse_args(argv=None):
                         action="store_true",
                         dest="debug",
                         help="set debug for logging.")
-
-    parser.add_argument("--pulse",
-                        action="store_true",
-                        dest="pulse",
-                        help="flag to run with pulse")
 
     # These are the various modes in which we can run this script
     parser.add_argument("--delta",
@@ -180,11 +174,8 @@ if __name__ == "__main__":
         exit(1)
 
     if revlist:
-        repo = query_repo_name_from_buildername(options.buildername)
         LOG.info('https://treeherder.mozilla.org/#/jobs?%s' %
-                 urllib.urlencode({'repo': repo,
+                 urllib.urlencode({'repo': query_repo_name_from_buildername(options.buildername),
                                    'fromchange': revlist[-1],
                                    'tochange': revlist[0],
                                    'filter-searchStr': options.buildername}))
-        if options.pulse:
-            run_pulse(repo)

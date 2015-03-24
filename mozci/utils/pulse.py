@@ -1,24 +1,27 @@
 import logging
 import getpass
-import sys
 
-from mozillapulse.config import PulseConfiguration
-from mozillapulse.consumers import GenericConsumer
+from mozillapulse.consumers import NormalizedBuildConsumer
 
 LOG = logging.getLogger()
-
-class TreeherderJobActionsConsumer(GenericConsumer):
-
-    def __init__(self, **kwargs):
-        super(TreeherderJobActionsConsumer, self).__init__(
-            PulseConfiguration(**kwargs), 'exchange/treeherder/v1/job-actions', **kwargs)
+CREDENTIALS = []
 
 
-def run_pulse(repo_name):
-    user = raw_input('Please type your pulse username: ')
-    password = getpass.getpass('Pulse password: ')
+def get_pulse_credentials():
+    global CREDENTIALS
+    if not CREDENTIALS:
+        user = raw_input("Please type your pulse username: ")
+        password = getpass.getpass("Pulse password: ")
+        CREDENTIALS = [user, password]
+    else:
+        LOG.debug('Accessing saved in-memory pulse credentials')
+    return CREDENTIALS
+
+
+def run_pulse(repo_name, topic_type, buildername, rev):
     label = 'mozci'
-    topic = 'buildbot.{}.retrigger'.format(repo_name)
+    topic = '{}.{}.#'.format(topic_type, repo_name)
+    user, password = get_pulse_credentials()
     pulse_args = {
         'applabel': label,
         'topic': topic,
@@ -27,12 +30,20 @@ def run_pulse(repo_name):
         'password': password
     }
     def on_build_event(data, message):
-        LOG.info('Retrigger requested by %s received for job %s' % (
-            data['requester'], data['job_id']))
+        payload = data['payload']
+        if payload['buildername'] != buildername or not payload['revision'].startswith(rev):
+             return
+        LOG.info('%s completed' % buildername)
+        if 'blobber_files' in payload:
+            structured_logs = [url for fn, url in payload['blobber_files'].iteritems()
+                               if fn.endswith('_raw.log')]
+            if structured_logs:
+                LOG.info('Structured logs for %s available in %s' %
+                         (payload['buildername'], structured_logs[0]))
+                exit()
+    pulse = NormalizedBuildConsumer(callback=on_build_event, **pulse_args)
+    LOG.info('Listening on %s' % topic)
+    while True:
+        pulse.listen()
 
-    pulse = TreeherderJobActionsConsumer(callback=on_build_event, **pulse_args)
-    try:
-        while True:
-            pulse.listen()
-    except KeyboardInterrupt:
-        sys.exit(1)
+get_pulse_credentials()
