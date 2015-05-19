@@ -13,6 +13,7 @@ interactions with distinct modules to meet your needs.
 from __future__ import absolute_import
 
 import logging
+import urllib
 
 from mozci.platforms import determine_upstream_builder, is_downstream
 from mozci.sources import allthethings, buildapi, buildjson, pushlog
@@ -82,94 +83,101 @@ def _status_summary(jobs):
     return (successful, pending, running, coalesced)
 
 
-def _determine_trigger_objective(revision, buildername):
+def _determine_trigger_objective(revision, buildernames):
     """
-    Determine if we need to trigger any jobs and which job.
+    For every buildername in buildernames, determine if we need to trigger any jobs and which job.
 
-    Returns:
+    Returns a list of tuples, each tuple contains:
 
     * The name of the builder we need to trigger
     * Files, if needed, to trigger such builder
     """
-    builder_to_trigger = None
-    files = None
-    repo_name = query_repo_name_from_buildername(buildername)
-
-    build_buildername = determine_upstream_builder(buildername)
-
-    assert valid_builder(build_buildername), \
-        "Our platforms mapping system has failed."
-
-    if build_buildername == buildername:
-        # For a build job we know that we don't need files to
-        # trigger it and it's the build job we want to trigger
-        return build_buildername, None
-
+    ret_value = []
+    # We assume that every buildername in the list will be from the same branch
+    repo_name = query_repo_name_from_buildername(buildernames[0])
     # Let's figure out which jobs are associated to such revision
     all_jobs = query_jobs(repo_name, revision)
-    # Let's only look at jobs that match such build_buildername
-    build_jobs = _matching_jobs(build_buildername, all_jobs)
 
-    # We need to determine if we need to trigger a build job
-    # or the test job
-    successful_job = None
-    running_job = None
-
-    LOG.debug("List of matching jobs:")
-    for job in build_jobs:
-        try:
-            status = buildapi.query_job_status(job)
-        except buildjson.BuildjsonException:
-            LOG.debug("We have hit bug 1159279 and have to work around it. We will pretend that "
-                      "we could not reach the files for it.")
-            continue
-
-        if status == buildapi.RUNNING:
-            LOG.debug("We found a running build job. We don't search anymore.")
-            running_job = job
-        elif status == buildapi.SUCCESS:
-            LOG.debug("We found a successful job. We don't search anymore.")
-            files = _find_files(job)
-
-            if files != [] and _all_urls_reachable(files):
-                successful_job = job
-                break
-            else:
-                LOG.debug("We can't determine the files for this build or "
-                          "can't reach them.")
-                files = None
-        else:
-            LOG.debug("We found a job that finished but its status "
-                      "is not successful. status: %d" % status)
-
-    if successful_job:
-        # A build job has completed successfully and the files can be reached
-        LOG.info("There is a _build_ job that has completed successfully.")
-        LOG.debug(str(successful_job))
-        LOG.info("We have the necessary files to trigger the downstream job.")
-        # We have the files needed to trigger the test job
-        builder_to_trigger = buildername
-    elif running_job:
-        # NOTE: Note that a build might have not finished yet
-        # the installer and test.zip might already have been uploaded
-        # For now, we will ignore this situation but need to take note of it
-        LOG.info("We are waiting for the associated build job to finish.")
-        LOG.debug(str(running_job))
+    for buildername in buildernames:
         builder_to_trigger = None
-    else:
-        # We were trying to build a test job, however, we determined
-        # that we need an upstream builder instead
-        if not _unique_build_request(build_buildername, revision):
-            # This is a safeguard to prevent triggering a build
-            # job multiple times if it is not intentional
-            builder_to_trigger = None
-        else:
-            LOG.info("We need to trigger the build job (1) in order to be able to run the test job (2)"
-                     "which we'll be triggered later")
-            LOG.info("We will trigger 1) '%s' instead of 2) '%s'" % (build_buildername, buildername))
-            builder_to_trigger = build_buildername
+        files = None
 
-    return builder_to_trigger, files
+        build_buildername = determine_upstream_builder(buildername)
+
+        assert valid_builder(build_buildername), \
+            "Our platforms mapping system has failed."
+
+        if build_buildername == buildername:
+            # For a build job we know that we don't need files to
+            # trigger it and it's the build job we want to trigger
+            ret_value.append((build_buildername, None))
+
+        # Let's only look at jobs that match such build_buildername
+        build_jobs = _matching_jobs(build_buildername, all_jobs)
+
+        # We need to determine if we need to trigger a build job
+        # or the test job
+        successful_job = None
+        running_job = None
+
+        LOG.debug("List of matching jobs:")
+        for job in build_jobs:
+            try:
+                status = buildapi.query_job_status(job)
+            except buildjson.BuildjsonException:
+                LOG.debug("We have hit bug 1159279 and have to work around it. We will pretend that "
+                          "we could not reach the files for it.")
+                continue
+
+            if status == buildapi.RUNNING:
+                LOG.debug("We found a running build job. We don't search anymore.")
+                running_job = job
+
+            elif status == buildapi.SUCCESS:
+                LOG.debug("We found a successful job. We don't search anymore.")
+                files = _find_files(job)
+
+                if files != [] and _all_urls_reachable(files):
+                    successful_job = job
+
+                else:
+                    LOG.debug("We can't determine the files for this build or "
+                              "can't reach them.")
+                    files = None
+            else:
+                LOG.debug("We found a job that finished but its status "
+                          "is not successful. status: %d" % status)
+
+            if successful_job:
+                # A build job has completed successfully and the files can be reached
+                LOG.info("There is a _build_ job that has completed successfully.")
+                LOG.debug(str(successful_job))
+                LOG.info("We have the necessary files to trigger the downstream job.")
+                # We have the files needed to trigger the test job
+                builder_to_trigger = buildername
+            elif running_job:
+                # NOTE: Note that a build might have not finished yet
+                # the installer and test.zip might already have been uploaded
+                # For now, we will ignore this situation but need to take note of it
+                LOG.info("We are waiting for the associated build job to finish.")
+                LOG.debug(str(running_job))
+                builder_to_trigger = None
+
+        if len(build_jobs) == 0:
+            # We were trying to build a test job, however, we determined
+            # that we need an upstream builder instead
+            if not _unique_build_request(build_buildername, revision):
+                # This is a safeguard to prevent triggering a build
+                # job multiple times if it is not intentional
+                builder_to_trigger = None
+            else:
+                LOG.info("We need to trigger the build job (1) in order to be able to run the test job (2)"
+                         "which we'll be triggered later")
+                LOG.info("We will trigger 1) '%s' instead of 2) '%s'" % (build_buildername, buildername))
+                builder_to_trigger = build_buildername
+        ret_value.append((builder_to_trigger, files))
+
+    return ret_value
 
 
 def _status_info(job_schedule_info):
@@ -341,8 +349,8 @@ def trigger_job(revision, buildername, times=1, files=None, dry_run=False,
     else:
         builder_to_trigger, files = _determine_trigger_objective(
             revision,
-            buildername,
-        )
+            [buildername],
+        )[0]
 
         if builder_to_trigger != buildername and times != 1:
             # The user wants to trigger a downstream job,
@@ -366,6 +374,67 @@ def trigger_job(revision, buildername, times=1, files=None, dry_run=False,
                     list_of_requests.append(req)
     else:
         LOG.debug("Nothing needs to be triggered")
+
+    return list_of_requests
+
+
+def trigger_list_of_jobs(revision, buildernames, times=1, files=None, dry_run=False,
+                         extra_properties=None):
+    """Trigger every job in a list through self-serve.
+
+    We return a list of all requests made.
+    """
+    repo_name = query_repo_name_from_buildername(buildernames[0])
+    builder_to_trigger = None
+    list_of_requests = []
+    LOG.info("We want to trigger the given jobs on revision '%s' a total of %d time(s)." %
+             (revision, times))
+
+    if not buildapi.valid_revision(repo_name, revision):
+        return list_of_requests
+
+    for buildername in buildernames:
+        if not valid_builder(buildername):
+            LOG.error("The builder %s requested is invalid" % buildername)
+            # XXX How should we exit cleanly?
+            exit(-1)
+
+    trigger_tuples = _determine_trigger_objective(
+        revision,
+        buildernames
+    )
+    for builder_to_trigger, files in trigger_tuples:
+        LOG.info("")
+        LOG.info("=== %s ===" % builder_to_trigger)
+
+        if builder_to_trigger not in buildernames and times != 1:
+            # The user wants to trigger a downstream job,
+            # however, we need a build job instead.
+            # We should trigger the downstream job multiple times, however,
+            # we only trigger the upstream jobs once.
+            LOG.debug("Since we need to trigger a build job we don't need to "
+                      "trigger it %s times but only once." % times)
+            times = 1
+
+        if builder_to_trigger:
+            if dry_run:
+                LOG.info("Dry-run: We were going to request '%s' %s times." %
+                         (builder_to_trigger, times))
+                # Running with dry_run being True will only output information
+                trigger(builder_to_trigger, revision, files, dry_run, extra_properties)
+            else:
+                LOG.info('https://treeherder.mozilla.org/#/jobs?%s' %
+                         urllib.urlencode({'repo': repo_name,
+                                           'revision': revision,
+                                           'filter-searchStr': builder_to_trigger}))
+
+                for _ in range(times):
+                    req = trigger(builder_to_trigger, revision, files, dry_run, extra_properties)
+                    if req is not None:
+                        list_of_requests.append(req)
+
+        else:
+            LOG.debug("Nothing needs to be triggered")
 
     return list_of_requests
 

@@ -9,7 +9,7 @@ import urllib
 
 from argparse import ArgumentParser
 
-from mozci.mozci import trigger_range, query_repo_name_from_buildername, query_builders
+from mozci.mozci import trigger_list_of_jobs, query_builders
 from mozci.platforms import filter_buildernames
 
 logging.basicConfig(format='%(asctime)s %(levelname)s:\t %(message)s',
@@ -89,19 +89,12 @@ def main():
     if cont.lower() != 'y':
         exit(1)
 
-    for buildername in buildernames:
-        trigger_range(
-            buildername=buildername,
-            revisions=[options.rev],
-            times=options.times,
-            dry_run=options.dry_run,
-        )
+    trigger_list_of_jobs(options.rev, buildernames, times=options.times, dry_run=options.dry_run)
 
-        LOG.info('https://treeherder.mozilla.org/#/jobs?%s' %
-                 urllib.urlencode({'repo': query_repo_name_from_buildername(buildername),
-                                   'fromchange': options.rev,
-                                   'tochange': options.rev,
-                                   'filter-searchStr': buildername}))
+    LOG.info('https://treeherder.mozilla.org/#/jobs?%s' %
+             urllib.urlencode({'repo': options.repo,
+                               'fromchange': options.rev,
+                               'tochange': options.rev}))
 
 
 if __name__ == '__main__':
