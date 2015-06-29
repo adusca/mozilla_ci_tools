@@ -5,6 +5,7 @@ from argparse import ArgumentParser
 
 from mozci.mozci import backfill_revlist, trigger_range, \
     query_repo_name_from_buildername, query_repo_url_from_buildername, query_builders
+from mozci.platforms import get_upstream_buildernames
 from mozci.sources.buildapi import find_all_by_status, make_retrigger_request, COALESCED
 from mozci.sources.pushlog import query_revisions_range_from_revision_and_delta
 from mozci.sources.pushlog import query_revisions_range, query_revision_info, query_pushid_range
@@ -89,6 +90,12 @@ def parse_args(argv=None):
                         help="Trigger every coalesced job on revision --rev "
                         "and repo --repo-name.")
 
+    parser.add_argument("--fill-in",
+                        action="store_true",
+                        dest="fill_in",
+                        help="Fill in missing jobs at revision --rev "
+                        "and repo --repo-name.")
+
     parser.add_argument("--repo-name",
                         dest="repo_name",
                         help="Branch name")
@@ -99,10 +106,10 @@ def parse_args(argv=None):
 
 def validate_options(options):
     error_message = ""
-    if not options.buildernames and not options.coalesced:
-        error_message = "A buildername is mandatory for all modes except --coalesced. " \
-                        "Use --buildername."
-    if options.coalesced and not options.repo_name:
+    if not options.buildernames and not (options.coalesced or options.fill_in):
+        error_message = "A buildername is mandatory for all modes except --coalesced " \
+                        "and --fill-in. Use --buildername."
+    if (options.coalesced or options.fill_in) and not options.repo_name:
         error_message = "A branch name is mandatory with --coalesced. Use --repo-name."
 
     if options.back_revisions:
@@ -205,7 +212,12 @@ def main():
 
         return
 
-    options.buildernames = sanitize_buildernames(options.buildernames)
+    if options.fill_in:
+        options.buildernames = get_upstream_buildernames(options.repo_name)
+
+    else:
+        options.buildernames = sanitize_buildernames(options.buildernames)
+
     repo_url = query_repo_url_from_buildername(options.buildernames[0])
 
     for buildername in options.buildernames:

@@ -318,3 +318,15 @@ def filter_buildernames(include, exclude, buildernames):
         buildernames = filter(lambda x: word.lower() not in x.lower(), buildernames)
 
     return sorted(buildernames)
+
+
+def get_upstream_buildernames(repo_name):
+    """Return every upstream buildername in a repo."""
+    buildernames = filter_buildernames([repo_name],
+                                       ['hg bundle'],
+                                       fetch_allthethings_data()['builders'])
+    upstream_jobs = []
+    for buildername in buildernames:
+        if not is_downstream(buildername):
+            upstream_jobs.append(buildername)
+    return upstream_jobs
